@@ -69,7 +69,7 @@ model_id = "microsoft/Phi-3-mini-4k-instruct"
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.float16,
-    attn_implementation="sdpa",
+    attn_implementation="eager",
     device_map="cuda",
     # trust_remote_code=True
 )

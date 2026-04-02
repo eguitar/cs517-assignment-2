@@ -1,0 +1,11 @@
+# SEC filing HTML/PDF downloads
+sec-edgar-10q-filings/
+
+# FAISS index
+faiss_index/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env

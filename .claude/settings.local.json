@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed 's/.*\\\\.//')",
+      "Bash(curl -s \"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000796343&type=10-Q&dateb=&owner=include&count=5\" -H \"User-Agent: MyResearchLab admin@researchlab.com\")",
+      "Bash(curl -s \"https://www.sec.gov/Archives/edgar/data/796343/000079634325000107/0000796343-25-000107-index.htm\" -H \"User-Agent: MyResearchLab admin@researchlab.com\")",
+      "Bash(curl -s \"https://www.sec.gov/Archives/edgar/data/2488/000000248825000108/0000002488-25-000108-index.htm\" -H \"User-Agent: MyResearchLab admin@researchlab.com\")",
+      "Bash(ls \"c:/Users/waves/Desktop/CS 5170/cs517-assignment-2/\"*.py)",
+      "Bash(pip install:*)",
+      "Bash(python run.py)",
+      "Bash(C:/Users/waves/miniconda3/envs/llama_hw/python.exe run.py)",
+      "Bash(C:/Users/waves/miniconda3/Scripts/conda.exe rename:*)",
+      "Bash(C:/Users/waves/miniconda3/envs/python_wsp/python.exe -c \"import torch; print\\(''torch:'', torch.__version__, ''| CUDA:'', torch.cuda.is_available\\(\\)\\); import numpy; print\\(''numpy:'', numpy.__version__\\); t = torch.tensor\\([1.0]\\); print\\(''tensor.numpy\\(\\):'', t.numpy\\(\\)\\)\")"
+    ]
+  }
+}

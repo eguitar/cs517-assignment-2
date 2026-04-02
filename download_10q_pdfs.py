@@ -85,9 +85,13 @@ def get_filings(cik: str, start: str, end: str) -> list:
 
 def get_filing_documents(cik: str, accession_nodash: str, accession_fmt: str) -> dict:
     """
-    Parse the filing index and return:
+    Parse the filing index table and return the 10-Q document URLs:
       { "pdf": <url or None>, "html": <url or None> }
+    Looks for rows in the SEC tableFile where Type == '10-Q', so we
+    never accidentally grab an exhibit (EX-31.1, etc.).
     """
+    from bs4 import BeautifulSoup
+
     cik_int   = int(cik)
     base      = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}"
     index_url = f"{base}/{accession_fmt}-index.htm"
@@ -100,36 +104,36 @@ def get_filing_documents(cik: str, accession_nodash: str, accession_fmt: str) ->
         if r.status_code != 200:
             return result
 
-    html_text = r.text
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table", class_="tableFile")
+    if not table:
+        return result
 
-    # Look for any PDF
-    pdf_matches = re.findall(
-        r'href="(/Archives/edgar/data/[^"]+\.pdf)"',
-        html_text, re.IGNORECASE
-    )
-    if pdf_matches:
-        result["pdf"] = "https://www.sec.gov" + pdf_matches[0]
-    else:
-        pdf_rel = re.findall(r'href="([^"/][^"]*\.pdf)"', html_text, re.IGNORECASE)
-        if pdf_rel:
-            result["pdf"] = f"{base}/{pdf_rel[0]}"
-
-    # Look for primary HTML document (first .htm that isn't the index itself)
-    htm_matches = re.findall(
-        r'href="(/Archives/edgar/data/[^"]+\.htm)"',
-        html_text, re.IGNORECASE
-    )
-    for href in htm_matches:
-        if "-index" not in href.lower():
-            result["html"] = "https://www.sec.gov" + href
-            break
-
-    if not result["html"]:
-        htm_rel = re.findall(r'href="([^"/][^"]*\.htm)"', html_text, re.IGNORECASE)
-        for href in htm_rel:
-            if "-index" not in href.lower():
-                result["html"] = f"{base}/{href}"
-                break
+    for row in table.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 4:
+            continue
+        doc_type = cells[3].get_text(strip=True)
+        if doc_type != "10-Q":
+            continue
+        # This row is the actual 10-Q document
+        link = cells[2].find("a")
+        if not link:
+            continue
+        href = link.get("href", "")
+        if not href:
+            continue
+        # Strip iXBRL viewer wrapper: /ix?doc=/Archives/... → /Archives/...
+        if href.startswith("/ix?doc="):
+            href = href[len("/ix?doc="):]
+        # href is relative like "filename.htm" or absolute like "/Archives/..."
+        url = ("https://www.sec.gov" + href) if href.startswith("/") else f"{base}/{href}"
+        if href.lower().endswith(".pdf"):
+            if not result["pdf"]:
+                result["pdf"] = url
+        else:
+            if not result["html"]:
+                result["html"] = url
 
     return result
 

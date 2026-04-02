@@ -7,8 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 import re
-from langchain_classic.retrievers.multi_query import MultiQueryRetriever
-from langchain_core.runnables import RunnableLambda
+import sys
 
 # PROMPT 1
 prompt = PromptTemplate.from_template("""<|system|>
@@ -157,23 +156,44 @@ chain = (
     )
 )
 
-while True:
-    question = input("You: ").strip()
-    if question.lower() in ["exit", "quit"]: break
+def run_batch(questions_path: str, output_path: str):
+    """Read questions one per line, write one answer per line to output."""
+    with open(questions_path, 'r') as f:
+        questions = [line.strip() for line in f if line.strip()]
 
-    print("Thinking...\n")
-    
-    # result is now a dictionary
-    result = chain.invoke(question)
-    print("----- WITH RAG -----")
-    print(f"Answer: {result}\n")
+    print(f"Running batch on {len(questions)} questions → {output_path}")
+    with open(output_path, 'w') as out:
+        for i, question in enumerate(questions, 1):
+            print(f"  [{i}/{len(questions)}] {question}")
+            result = chain.invoke(question)
+            answer = result['answer'].strip().replace('\n', ' ')
+            out.write(answer + '\n')
+    print("Done.")
 
-    print("----- RETRIEVED CHUNKS -----")
-    for i, doc in enumerate(result['source_documents']):
-        print(f"Chunk {i+1}:")
-        # Print a snippet of the content
-        print(f"Content: {doc.page_content[1:]}...")
-        # Access metadata (e.g., filename, page number)
-        if doc.metadata:
-            print(f"Metadata: {doc.metadata}")
-        print("-" * 10)
+
+def run_interactive():
+    while True:
+        question = input("You: ").strip()
+        if question.lower() in ["exit", "quit"]:
+            break
+
+        print("Thinking...\n")
+        result = chain.invoke(question)
+        print("----- WITH RAG -----")
+        print(f"Answer: {result['answer']}\n")
+
+        print("----- RETRIEVED CHUNKS -----")
+        for i, doc in enumerate(result['source_documents']):
+            print(f"Chunk {i+1}:")
+            print(f"Content: {doc.page_content[:300]}...")
+            if doc.metadata:
+                print(f"Metadata: {doc.metadata}")
+            print("-" * 10)
+
+
+# Run batch if arguments provided, otherwise interactive
+# Usage: python llm.py questions.txt system_output.txt
+if len(sys.argv) == 3:
+    run_batch(sys.argv[1], sys.argv[2])
+else:
+    run_interactive()

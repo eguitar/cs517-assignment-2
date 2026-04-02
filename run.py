@@ -5,7 +5,6 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_chroma import Chroma
 from langchain_community.vectorstores.utils import DistanceStrategy
 from datetime import datetime
 
@@ -328,20 +327,19 @@ def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Documen
     return documents
 
 
-def load_all_filings(base_dir: str = './filings') -> list[Document]:
+def load_all_filings(base_dir: str = './sec-edgar-10q-filings') -> list[Document]:
     all_docs = []
     for root, dirs, files in os.walk(base_dir):
         for fname in files:
             if not fname.endswith('.html'):
                 continue
             path = os.path.join(root, fname)
-            path_parts = os.path.normpath(path).split(os.sep)
-            try:
-                base_idx = path_parts.index('filings')
-                ticker = path_parts[base_idx + 1]
-                filing_date = path_parts[base_idx + 2][:10]
-            except (ValueError, IndexError):
-                ticker, filing_date = 'Unknown', 'Unknown'
+            # Structure: base_dir/{TICKER}/{filename}
+            # Extract ticker from the immediate parent folder name
+            ticker = os.path.basename(os.path.dirname(path))
+            # Extract date from filename: TICKER_10Q_YYYY-MM-DD_...html
+            date_match = re.search(r'_(\d{4}-\d{2}-\d{2})_', fname)
+            filing_date = date_match.group(1) if date_match else 'Unknown'
 
             docs = parse_sec_html(path, ticker, filing_date)
             all_docs.extend(docs)
@@ -352,13 +350,13 @@ def load_all_filings(base_dir: str = './filings') -> list[Document]:
 # LOAD
 # ─────────────────────────────────────────────
 print("Loading and parsing HTML filings...")
-docs = load_all_filings('./filings')
+docs = load_all_filings('./sec-edgar-10q-filings')
 
 table_docs = [d for d in docs if d.metadata.get('content_type') == 'table']
 text_docs  = [d for d in docs if d.metadata.get('content_type') == 'text']
 print(f"Loaded {len(docs)} total sections")
-print(f"  └─ {len(table_docs)} table blocks")
-print(f"  └─ {len(text_docs)} narrative blocks")
+print(f"  -> {len(table_docs)} table blocks")
+print(f"  -> {len(text_docs)} narrative blocks")
 
 if table_docs:
     print("\nSample table block:")
@@ -390,9 +388,6 @@ for doc in docs:
                 final_chunks.append(chunk)
 
 print(f"Final chunk count: {len(final_chunks)}")
-
-for i in final_chunks[:20]:
-    print(i)
 
 truncated = [
     c for c in final_chunks

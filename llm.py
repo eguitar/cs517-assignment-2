@@ -156,12 +156,18 @@ chain = (
     )
 )
 
-def run_batch(questions_path: str, output_path: str):
-    """Read questions one per line, write one answer per line to output."""
+def run_batch(questions_path: str, output_path: str, references_path: str = None):
+    """Read questions one per line, write one answer per line to output.
+    Optionally scores against reference answers if references_path is provided.
+    """
+    import sys as _sys
+    _sys.path.insert(0, './metric_testing')
+    from metrics import evaluate
+
     with open(questions_path, 'r') as f:
         questions = [line.strip() for line in f if line.strip()]
 
-    print(f"Running batch on {len(questions)} questions → {output_path}")
+    print(f"Running batch on {len(questions)} questions -> {output_path}")
     with open(output_path, 'w') as out:
         for i, question in enumerate(questions, 1):
             print(f"  [{i}/{len(questions)}] {question}")
@@ -169,6 +175,14 @@ def run_batch(questions_path: str, output_path: str):
             answer = result['answer'].strip().replace('\n', ' ')
             out.write(answer + '\n')
     print("Done.")
+
+    if references_path:
+        print("\nEvaluating...")
+        results = evaluate(output_path, references_path)
+        print("\n--- Evaluation Results ---")
+        for k, v in results.items():
+            print(f"  {k:<20} {str(v) + '%' if k != 'num_questions' else str(v)}")
+        print("--------------------------")
 
 
 def run_interactive():
@@ -182,18 +196,22 @@ def run_interactive():
         print("----- WITH RAG -----")
         print(f"Answer: {result['answer']}\n")
 
-        print("----- RETRIEVED CHUNKS -----")
-        for i, doc in enumerate(result['source_documents']):
-            print(f"Chunk {i+1}:")
-            print(f"Content: {doc.page_content[:300]}...")
-            if doc.metadata:
-                print(f"Metadata: {doc.metadata}")
-            print("-" * 10)
+        # print("----- RETRIEVED CHUNKS -----")
+        # for i, doc in enumerate(result['source_documents']):
+        #     print(f"Chunk {i+1}:")
+        #     print(f"Content: {doc.page_content[:300]}...")
+        #     if doc.metadata:
+        #         print(f"Metadata: {doc.metadata}")
+        #     print("-" * 10)
 
 
-# Run batch if arguments provided, otherwise interactive
-# Usage: python llm.py questions.txt system_output.txt
-if len(sys.argv) == 3:
+# Usage:
+#   python llm.py                                                      -> interactive
+#   python llm.py questions.txt system_output.txt                      -> batch
+#   python llm.py questions.txt system_output.txt reference_answers.txt -> batch + eval
+if len(sys.argv) == 4:
+    run_batch(sys.argv[1], sys.argv[2], sys.argv[3])
+elif len(sys.argv) == 3:
     run_batch(sys.argv[1], sys.argv[2])
 else:
     run_interactive()

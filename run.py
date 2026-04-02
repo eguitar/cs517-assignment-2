@@ -214,6 +214,55 @@ def split_large_table(rows: list[str], prefix: str, metadata: dict, max_chars: i
     ]
 
 
+def table_rows_to_nl_docs(rows: list[str], prefix: str, metadata: dict) -> list[Document]:
+    """
+    Convert period-labeled table rows into natural language sentences.
+    Assumes rows[0] is a header like: | Metric | Q3 FY2025 | Q3 FY2024 |
+    Each data row becomes its own Document so the embedding model can
+    retrieve specific metrics semantically rather than scanning raw markdown.
+    Example output:
+      "[AAPL 10-Q 2025-08-01] Net sales: 94,930 (Q3 FY2025) vs 85,777 (Q3 FY2024)"
+    """
+    if not rows:
+        return []
+
+    # Parse period labels from header row
+    header_cells = [c.strip() for c in rows[0].split('|') if c.strip()]
+    periods = header_cells[1:]  # first cell is "Metric"
+
+    docs = []
+    for row in rows[1:]:
+        if not row or '---' in row:
+            continue
+        cells = [c.strip() for c in row.split('|') if c.strip()]
+        if len(cells) < 2:
+            continue
+
+        metric = cells[0]
+        values = cells[1:]
+
+        # Skip rows with no metric label or all-empty values
+        if not metric or not any(v for v in values):
+            continue
+
+        parts = []
+        for i, val in enumerate(values):
+            period = periods[i] if i < len(periods) else f"col{i+1}"
+            parts.append(f"{val} ({period})")
+
+        sentence = f"{prefix} {metric}: {' vs '.join(parts)}"
+        doc = Document(
+            page_content=sentence,
+            metadata={**metadata, 'content_type': 'table_nl'}
+        )
+        doc.metadata['section'] = tag_section(sentence)
+        doc.metadata['note_number'] = tag_note_number(sentence)
+        doc.metadata['period'] = periods[0] if periods else None
+        docs.append(doc)
+
+    return docs
+
+
 def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Document]:
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         soup = BeautifulSoup(f.read(), 'html.parser')
@@ -287,24 +336,30 @@ def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Documen
         if len(rows) < 2:
             continue
 
-        table_text = '\n'.join(rows)
-
-        if len(table_text) > MAX_TABLE_CHARS:
-            docs = split_large_table(rows, prefix, metadata, MAX_TABLE_CHARS)
-            for doc in docs:
+        if header_injected:
+            # Period header was detected — convert rows to NL sentences for
+            # better semantic retrieval of specific financial metrics
+            nl_docs = table_rows_to_nl_docs(rows, prefix, metadata)
+            documents.extend(nl_docs)
+        else:
+            # No period header — fall back to storing as markdown table
+            table_text = '\n'.join(rows)
+            if len(table_text) > MAX_TABLE_CHARS:
+                docs = split_large_table(rows, prefix, metadata, MAX_TABLE_CHARS)
+                for doc in docs:
+                    doc.metadata["section"] = tag_section(doc.page_content)
+                    doc.metadata["note_number"] = tag_note_number(doc.page_content)
+                    doc.metadata["period"] = extract_fiscal_period(doc.page_content, ticker)
+                documents.extend(docs)
+            else:
+                doc = Document(
+                    page_content=f"{prefix}\n{table_text}",
+                    metadata={**metadata, 'content_type': 'table'}
+                )
                 doc.metadata["section"] = tag_section(doc.page_content)
                 doc.metadata["note_number"] = tag_note_number(doc.page_content)
-                doc.metadata["period"] = extract_fiscal_period(doc.page_content, ticker)
-            documents.extend(docs)
-        else:
-            doc = Document(
-                page_content=f"{prefix}\n{table_text}",
-                metadata={**metadata, 'content_type': 'table'}
-            )
-            doc.metadata["section"] = tag_section(doc.page_content)
-            doc.metadata["note_number"] = tag_note_number(doc.page_content)
-            doc.metadata["period"] = extract_fiscal_period(table_text, ticker)
-            documents.append(doc)
+                doc.metadata["period"] = extract_fiscal_period(table_text, ticker)
+                documents.append(doc)
 
     # --- Extract narrative text ---
     for tag in soup.find_all(['p', 'div', 'li']):
@@ -352,10 +407,12 @@ def load_all_filings(base_dir: str = './sec-edgar-10q-filings') -> list[Document
 print("Loading and parsing HTML filings...")
 docs = load_all_filings('./sec-edgar-10q-filings')
 
-table_docs = [d for d in docs if d.metadata.get('content_type') == 'table']
-text_docs  = [d for d in docs if d.metadata.get('content_type') == 'text']
+table_docs   = [d for d in docs if d.metadata.get('content_type') == 'table']
+table_nl_docs = [d for d in docs if d.metadata.get('content_type') == 'table_nl']
+text_docs    = [d for d in docs if d.metadata.get('content_type') == 'text']
 print(f"Loaded {len(docs)} total sections")
-print(f"  -> {len(table_docs)} table blocks")
+print(f"  -> {len(table_nl_docs)} NL table rows (period-labeled)")
+print(f"  -> {len(table_docs)} markdown table blocks (no period header)")
 print(f"  -> {len(text_docs)} narrative blocks")
 
 if table_docs:

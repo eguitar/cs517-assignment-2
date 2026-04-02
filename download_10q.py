@@ -1,12 +1,3 @@
-"""
-SEC EDGAR 10-Q Downloader
-Downloads 10-Q filings from SEC EDGAR for top 30 Nasdaq companies.
-Prefers native PDFs; falls back to saving the primary HTML document as-is.
-
-Requirements:
-    pip install requests
-"""
-
 import re
 import time
 import requests

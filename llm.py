@@ -70,7 +70,7 @@ model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.float16,
     attn_implementation="eager",
-    device_map="cuda",
+    device_map="cuda",  # use "mps" on Apple Silicon
     # trust_remote_code=True
 )
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -86,7 +86,7 @@ llm = HuggingFacePipeline(pipeline=pipe)
 # Must change to match embedding model
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-base-en-v1.5",
-    model_kwargs={"device": "cuda"}
+    model_kwargs={"device": "cuda"}  # use "mps" on Apple Silicon
 )
 
 vectorstore = FAISS.load_local(
@@ -205,13 +205,19 @@ def run_interactive():
         #     print("-" * 10)
 
 
+import os
+
 # Usage:
 #   python llm.py                                                      -> interactive
 #   python llm.py questions.txt system_output.txt                      -> batch
 #   python llm.py questions.txt system_output.txt reference_answers.txt -> batch + eval
 if len(sys.argv) == 4:
-    run_batch(sys.argv[1], sys.argv[2], sys.argv[3])
+    output_path = os.path.join("system_outputs", sys.argv[2])
+    os.makedirs("system_outputs", exist_ok=True)
+    run_batch(sys.argv[1], output_path, sys.argv[3])
 elif len(sys.argv) == 3:
-    run_batch(sys.argv[1], sys.argv[2])
+    output_path = os.path.join("system_outputs", sys.argv[2])
+    os.makedirs("system_outputs", exist_ok=True)
+    run_batch(sys.argv[1], output_path)
 else:
     run_interactive()

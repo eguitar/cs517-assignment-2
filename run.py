@@ -459,7 +459,7 @@ print(f"Truncated table chunks: {len(truncated)}")
 # ─────────────────────────────────────────────
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-base-en-v1.5",
-    model_kwargs={"device": "cuda"},
+    model_kwargs={"device": "cuda"},  # use "mps" on Apple Silicon
     encode_kwargs={
         "batch_size": 32,
         "normalize_embeddings": True

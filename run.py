@@ -60,6 +60,59 @@ def tag_note_number(text: str) -> str | None:
 
 NOISE_SECTIONS = {"signature", "table_of_contents", "cover_page"}
 
+FINANCIAL_KEYWORDS = [
+    'balance', 'sheet', 'income', 'cash', 'flows', 'amortization',
+    'assets', 'liabilities', 'equity', 'operations', 'net sales',
+    'revenue', 'expenses', 'earnings', 'gross margin', 'operating'
+]
+
+BOILERPLATE_PHRASES = [
+    "pursuant to section 13 or 15",
+    "indicate by check mark",
+    "for such shorter period",
+    "large accelerated filer",
+    "state or other jurisdiction of incorporation",
+    "address of principal executive offices",
+    "pursuant to 18 u.s.c. section 1350",
+    "sarbanes-oxley act of 2002",
+    "certify, as of the date hereof",
+    "not contain any untrue statement of a material fact",
+    "fairly present in all material respects",
+    "rule 13a-14(a) / 15d-14(a) certification",
+]
+
+TECHNICAL_NOISE_KEYWORDS = [
+    'xbrli:', 'namespace prefix:', 'period type:', 'balance type:',
+    'data type:', 'definition available', 'http://fasb.org/',
+    'http://www.xbrl.org/', 'abstract namespace'
+]
+
+
+def is_relevant_table(table) -> bool:
+    """Keep only tables that contain financial content; drop XBRL taxonomy tables."""
+    table_text = table.get_text(" ", strip=True).lower()
+    taxonomy_indicators = ['namespace prefix', 'data type', 'balance type']
+    if any(ind in table_text for ind in taxonomy_indicators):
+        return False
+    return any(k in table_text for k in FINANCIAL_KEYWORDS)
+
+
+def is_technical_noise(text: str) -> bool:
+    """Return True for XBRL namespace walls and taxonomy definition blocks."""
+    text_lower = text.lower()
+    if "x - definition" in text_lower or "x - references" in text_lower:
+        return True
+    if any(kw in text_lower for kw in TECHNICAL_NOISE_KEYWORDS):
+        return True
+    xbrl_patterns = [r'us-gaap:', r'iso4217:', r'xbrli:', r'\d{10}']
+    return sum(1 for p in xbrl_patterns if re.search(p, text)) >= 2
+
+
+def is_boilerplate(text: str) -> bool:
+    """Return True for SOX certifications and cover-page boilerplate."""
+    text_lower = text.lower()
+    return any(phrase in text_lower for phrase in BOILERPLATE_PHRASES)
+
 
 # ─────────────────────────────────────────────
 # FISCAL CALENDAR MAPPING
@@ -141,18 +194,32 @@ def extract_fiscal_period(text: str, ticker: str = "") -> str | None:
 # ─────────────────────────────────────────────
 
 def clean_financial_chunk(text: str) -> str:
-    # Fix "$ 8,268" → "$8,268"
-    text = re.sub(r'\$\s+', '$', text)
-    # Fix "7 %" → "7%"
-    text = re.sub(r'(\d)\s+%', r'\1%', text)
-    return text
+    text = text.replace('\xa0', ' ')          # non-breaking space -> regular space
+    text = re.sub(r'\$\s+', '$', text)        # "$ 8,268" -> "$8,268"
+    text = re.sub(r'(\d)\s+%', r'\1%', text)  # "7 %" -> "7%"
+    text = re.sub(r'\s+', ' ', text)          # collapse multiple spaces
+    return text.strip()
 
 
 def clean_row(cells: list[str]) -> str:
-    cleaned = [c for c in cells if c.strip()]
-    if not cleaned:
+    """Build a pipe-delimited markdown row, merging lone '$' or '(' prefixes
+    with the following cell (e.g. ['$', '8,268'] -> '$8,268')."""
+    merged = []
+    skip_next = False
+    for i, cell in enumerate(cells):
+        if skip_next:
+            skip_next = False
+            continue
+        c = cell.strip()
+        if c in ('$', '(', '$(') and i + 1 < len(cells):
+            merged.append(f"{c}{cells[i + 1].strip()}")
+            skip_next = True
+        else:
+            merged.append(c)
+    final = [c for c in merged if c]
+    if not final:
         return ""
-    return "| " + " | ".join(cleaned) + " |"
+    return "| " + " | ".join(final) + " |"
 
 
 def rewrite_period_header(cleaned: str, ticker: str = "") -> str | None:
@@ -214,21 +281,38 @@ def split_large_table(rows: list[str], prefix: str, metadata: dict, max_chars: i
     ]
 
 
+def _build_period_header(period_types: list[str], dates: list[str], ticker: str) -> str:
+    """Build a pipe-delimited header row with rich period labels.
+    If 2+ period types (e.g. Three + Nine months) and 4+ dates: 4 columns.
+    Otherwise: 2 columns using the first period type.
+    Column format: '{period_type} {calendar_date} ({fiscal_quarter})'
+    """
+    cols = []
+    if len(period_types) >= 2 and len(dates) >= 4:
+        for i, d in enumerate(dates[:4]):
+            pt = period_types[0] if i < 2 else period_types[1]
+            q = get_fiscal_quarter(d, ticker) or d
+            cols.append(f"{pt} {d} ({q})")
+    else:
+        pt = period_types[0] if period_types else "three months ended"
+        for d in dates[:2]:
+            q = get_fiscal_quarter(d, ticker) or d
+            cols.append(f"{pt} {d} ({q})")
+    return "| Metric | " + " | ".join(cols) + " |"
+
+
 def table_rows_to_nl_docs(rows: list[str], prefix: str, metadata: dict) -> list[Document]:
     """
-    Convert period-labeled table rows into natural language sentences.
-    Assumes rows[0] is a header like: | Metric | Q3 FY2025 | Q3 FY2024 |
-    Each data row becomes its own Document so the embedding model can
-    retrieve specific metrics semantically rather than scanning raw markdown.
-    Example output:
-      "[AAPL 10-Q 2025-08-01] Net sales: 94,930 (Q3 FY2025) vs 85,777 (Q3 FY2024)"
+    Convert period-labeled table rows into one Document per (metric, period) pair.
+    Header format: | Metric | three months ended June 28, 2025 (Q3 FY2025) | ... |
+    Output: "[AAPL 10-Q 2025-08-01] Net sales for three months ended June 28, 2025 (Q3 FY2025): 94,036"
+    Columns with no header label are skipped (prevents YTD/quarterly mixing).
     """
     if not rows:
         return []
 
-    # Parse period labels from header row
     header_cells = [c.strip() for c in rows[0].split('|') if c.strip()]
-    periods = header_cells[1:]  # first cell is "Metric"
+    periods = header_cells[1:]  # e.g. ["three months ended June 28, 2025 (Q3 FY2025)", ...]
 
     docs = []
     for row in rows[1:]:
@@ -241,24 +325,25 @@ def table_rows_to_nl_docs(rows: list[str], prefix: str, metadata: dict) -> list[
         metric = cells[0]
         values = cells[1:]
 
-        # Skip rows with no metric label or all-empty values
         if not metric or not any(v for v in values):
             continue
 
-        parts = []
+        # One doc per (metric, period) pair — no mixing of periods in one sentence
         for i, val in enumerate(values):
-            period = periods[i] if i < len(periods) else f"col{i+1}"
-            parts.append(f"{val} ({period})")
-
-        sentence = f"{prefix} {metric}: {' vs '.join(parts)}"
-        doc = Document(
-            page_content=sentence,
-            metadata={**metadata, 'content_type': 'table_nl'}
-        )
-        doc.metadata['section'] = tag_section(sentence)
-        doc.metadata['note_number'] = tag_note_number(sentence)
-        doc.metadata['period'] = periods[0] if periods else None
-        docs.append(doc)
+            if not val or val in ('-', '\u2014', '\u2013'):
+                continue
+            if i >= len(periods):
+                continue  # skip unlabeled extra columns (e.g. YTD when header only covers quarterly)
+            period = periods[i]
+            sentence = f"{prefix} {metric} for {period}: {val}"
+            doc = Document(
+                page_content=sentence,
+                metadata={**metadata, 'content_type': 'table_nl'}
+            )
+            doc.metadata['section'] = tag_section(sentence)
+            doc.metadata['note_number'] = tag_note_number(sentence)
+            doc.metadata['period'] = period
+            docs.append(doc)
 
     return docs
 
@@ -278,9 +363,17 @@ def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Documen
 
     # --- Extract tables ---
     for table in soup.find_all('table'):
+        if not is_relevant_table(table):
+            continue
+
         rows = []
         header_injected = False
-        pending_period_label = None  # 👈 remembers "Three Months Ended" across rows
+        pending_period_types = []  # captures all matched period strings across rows
+
+        DATE_PAT = (
+            r'((?:january|february|march|april|may|june|july|august|'
+            r'september|october|november|december)\s+\d+,\s+\d{4})'
+        )
 
         for tr in table.find_all('tr'):
             cells = [td.get_text(strip=True) for td in tr.find_all(['td', 'th'])]
@@ -289,46 +382,35 @@ def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Documen
                 continue
 
             if not header_injected:
-                # Step 1: detect "Three/Six/Nine Months Ended" row (no dates yet)
-                if re.search(r'(three|six|nine)\s+months\s+ended', cleaned.lower()):
-                    pending_period_label = re.search(
-                        r'(three|six|nine)\s+months\s+ended', cleaned, re.IGNORECASE
-                    ).group(0)
-                    # Check if dates are also on this same row
-                    dates = re.findall(
-                        r'((?:january|february|march|april|may|june|july|august|'
-                        r'september|october|november|december)\s+\d+,\s+\d{4})',
-                        cleaned, flags=re.IGNORECASE
-                    )
+                # Step 1: detect "Three/Six/Nine Months Ended" row
+                period_matches = re.findall(
+                    r'(?:three|six|nine)\s+months\s+ended', cleaned, re.IGNORECASE
+                )
+                if period_matches:
+                    pending_period_types = period_matches
+                    dates = re.findall(DATE_PAT, cleaned, flags=re.IGNORECASE)
                     if len(dates) >= 2:
-                        # Dates and label on same row — rewrite immediately
-                        q1 = get_fiscal_quarter(dates[0], ticker) or dates[0]
-                        q2 = get_fiscal_quarter(dates[1], ticker) or dates[1]
-                        rows.append(f"| Metric | {q1} | {q2} |")
+                        # Dates and period labels on same row — build header immediately
+                        rows.append(_build_period_header(pending_period_types, dates, ticker))
                         header_injected = True
-                        pending_period_label = None
+                        pending_period_types = []
                     # else: dates are on the next row, skip this row entirely
                     continue
 
-                # Step 2: if previous row was "Three Months Ended", this row has the dates
-                if pending_period_label is not None:
-                    dates = re.findall(
-                        r'((?:january|february|march|april|may|june|july|august|'
-                        r'september|october|november|december)\s+\d+,\s+\d{4})',
-                        cleaned, flags=re.IGNORECASE
-                    )
+                # Step 2: previous row was the period-type row; this row has the dates
+                if pending_period_types:
+                    dates = re.findall(DATE_PAT, cleaned, flags=re.IGNORECASE)
                     if len(dates) >= 2:
-                        q1 = get_fiscal_quarter(dates[0], ticker) or dates[0]
-                        q2 = get_fiscal_quarter(dates[1], ticker) or dates[1]
-                        rows.append(f"| Metric | {q1} | {q2} |")
+                        rows.append(_build_period_header(pending_period_types, dates, ticker))
                         header_injected = True
-                        pending_period_label = None
+                        pending_period_types = []
                         continue
                     elif len(dates) == 1:
                         q1 = get_fiscal_quarter(dates[0], ticker) or dates[0]
-                        rows.append(f"| Metric | {q1} |")
+                        col = f"{pending_period_types[0]} {dates[0]} ({q1})"
+                        rows.append(f"| Metric | {col} |")
                         header_injected = True
-                        pending_period_label = None
+                        pending_period_types = []
                         continue
 
             rows.append(clean_financial_chunk(cleaned))
@@ -368,7 +450,7 @@ def parse_sec_html(filepath: str, ticker: str, filing_date: str) -> list[Documen
         text = clean_financial_chunk(
             tag.get_text(separator=' ', strip=True)
         )
-        if len(text) > 80:
+        if len(text) > 80 and not is_technical_noise(text) and not is_boilerplate(text):
             doc = Document(
                 page_content=f"{prefix}\n{text}",
                 metadata={**metadata, 'content_type': 'text'}
@@ -433,7 +515,7 @@ splitter = RecursiveCharacterTextSplitter(
 
 final_chunks = []
 for doc in docs:
-    if doc.metadata.get('content_type') == 'table':
+    if doc.metadata.get('content_type') in ('table', 'table_nl'):
         final_chunks.append(doc)
     else:
         splits = splitter.split_documents([doc])

@@ -63,9 +63,9 @@ def evaluate(system_output_path, reference_answers_path):
     """
     Reads both files line by line and returns macro-averaged EM, F1, and Recall.
     """
-    with open(system_output_path) as f:
+    with open(system_output_path, encoding='utf-8') as f:
         predictions = [line.strip() for line in f]
-    with open(reference_answers_path) as f:
+    with open(reference_answers_path, encoding='utf-8') as f:
         references = [line.strip() for line in f]
 
     assert len(predictions) == len(references), (

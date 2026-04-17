@@ -13,13 +13,17 @@
 ## Data Collection & Modeling
 
 **Kevin Xu**
+
 - Writing scripts to ...
 - Implementing ...
-  
+
 **Sheldin Lau**
-- Writing scripts to ...
-- Implementing ...
-  
+
+- Wrote script to embedded the document and store in faiss_index
+- Added the document retreiver to give context to the LLM
+- Ran different models to test the output of the LLM
+
 **Eric Trinh**
+
 - Writing scripts to ...
 - Implementing ...

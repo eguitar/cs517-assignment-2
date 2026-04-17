@@ -4,18 +4,6 @@
 
 A three-step pipeline to download SEC 10-Q filings, parse and embed them into a FAISS index, and query them using an LLM.
 
----
-
-## Prerequisites
-
-Make sure you have Python 3.8+ installed along with the required dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
 ## Step 1 — Download 10-Q Filings
 
 Run the downloader script to fetch all the 10-Q filings needed to build the embeddings:

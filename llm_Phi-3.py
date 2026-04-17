@@ -9,7 +9,6 @@ from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 import re
 import sys
 
-
 # PROMPT 1
 prompt = PromptTemplate.from_template("""<|system|>
 You are a financial data extraction assistant specialized in SEC filings.
@@ -97,7 +96,7 @@ embeddings = HuggingFaceEmbeddings(
 
 
 vectorstore = FAISS.load_local(
-    "./faiss_index_2", embeddings,
+    "./faiss_index", embeddings,
     allow_dangerous_deserialization=True
 )
 
@@ -172,10 +171,10 @@ def format_docs(docs):
 
 class CleanOutputParser(StrOutputParser):
     def parse(self, text: str) -> str:
-        # ✅ Strip Phi-3 thinking tokens
+        # Strip Phi-3 thinking tokens
         text = re.sub(r'<\|thinking\|>.*?<\|/thinking\|>', '', text, flags=re.DOTALL)
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        # ✅ Strip any other special Phi-3 tokens
+        # Strip any other special Phi-3 tokens
         text = re.sub(r'<\|.*?\|>', '', text)
         return text.strip()
     
@@ -197,13 +196,14 @@ def prioritized_search(vectorstore, query, k=4, table_boost=1.5):
 # Defines the retriever
 retriever = vectorstore.as_retriever( search_kwargs={"k": 5})
 
+prioritized_retriever = RunnableLambda(
+    lambda query: prioritized_search(vectorstore, query, k=10)
+)
+
 # Runs the full LLM chain 
 # 1. Calls the retriever
 # 2. passes the context from the retriever to LLM
 # 3. LLM output is cleaned and outputted
-prioritized_retriever = RunnableLambda(
-    lambda query: prioritized_search(vectorstore, query, k=10)
-)
 
 chain = (
     RunnableParallel(

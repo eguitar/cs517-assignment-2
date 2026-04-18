@@ -67,7 +67,7 @@ You will be prompted to enter questions one at a time. Type `exit` or `quit` to 
 To evaluate the performance of a given output.txt, run the following command:
 
 ```bash
-python metrics.py reference_answers.txt system_output.txt
+python evaluate.py reference_answers.txt system_output.txt
 ```
 
 ---

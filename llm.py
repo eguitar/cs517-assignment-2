@@ -65,29 +65,36 @@ Question: {question}<|im_end|>
 # Question: {question}
 # """)
 
-model_id = "Qwen/Qwen2.5-3B-Instruct"
+model_id = "Qwen/Qwen2.5-7B-Instruct"
 
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.float16,
-    attn_implementation="eager",
+    attn_implementation="sdpa",
     device_map="cuda",
+    # trust_remote_code=True
 )
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 
 pipe = pipeline(
     "text-generation", model=model, tokenizer=tokenizer,
-    max_new_tokens=256, temperature=0.1, do_sample=True,
-    return_full_text=False, repetition_penalty=1.15
+    max_new_tokens=512, temperature=0.1, do_sample=True,
+    return_full_text=False
 )
 llm = HuggingFacePipeline(pipeline=pipe)
 
 # Must change to match embedding model
+# embeddings = HuggingFaceEmbeddings(
+#     model_name="BAAI/bge-base-en-v1.5",
+#     model_kwargs={"device": "cuda"}
+# )
+
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-base-en-v1.5",
     model_kwargs={"device": "cuda"}
 )
+
 
 vectorstore = FAISS.load_local(
     "./faiss_index", embeddings,
@@ -97,10 +104,44 @@ vectorstore = FAISS.load_local(
 # ------------------ NOT USED ------------------ 
 TICKER_MAP = {
     "apple": "AAPL",
-    "amd": "AMD",
-    "meta": "META",
     "microsoft": "MSFT",
+    "nvidia": "NVDA",
+    "amazon": "AMZN",
+    "meta": "META",
+    "broadcom": "AVGO",
+    "tesla": "TSLA",
     "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "costco": "COST",
+    "netflix": "NFLX",
+    "amd": "AMD",
+    "advanced micro devices": "AMD",
+    "t-mobile": "TMUS",
+    "intuit": "INTU",
+    "qualcomm": "QCOM",
+    "applied materials": "AMAT",
+    "intuitive surgical": "ISRG",
+    "texas instruments": "TXN",
+    "honeywell": "HON",
+    "booking holdings": "BKNG",
+    "booking": "BKNG",
+    "lam research": "LRCX",
+    "vertex pharmaceuticals": "VRTX",
+    "vertex": "VRTX",
+    "adp": "ADP",
+    "automatic data processing": "ADP",
+    "analog devices": "ADI",
+    "micron": "MU",
+    "micron technology": "MU",
+    "palo alto networks": "PANW",
+    "palo alto": "PANW",
+    "mercadolibre": "MELI",
+    "regeneron": "REGN",
+    "regeneron pharmaceuticals": "REGN",
+    "kla": "KLAC",
+    "kla corporation": "KLAC",
+    "starbucks": "SBUX",
+    "synopsys": "SNPS",
 }
 
 def get_ticker_filter(query: str) -> dict | None:
@@ -119,10 +160,10 @@ def get_retriever(query: str):
 
 # TICKER prefiltering
 def get_dynamic_retriever(query: str):
-    # ticker_filter = get_ticker_filter(query)
+    ticker_filter = get_ticker_filter(query)
     search_kwargs = {"k": 4}
-    # if ticker_filter:
-    #     search_kwargs["filter"] = ticker_filter
+    if ticker_filter:
+        search_kwargs["filter"] = ticker_filter
     return vectorstore.as_retriever(search_kwargs=search_kwargs)
 # ------------------ NOT USED ------------------ 
 
@@ -131,67 +172,64 @@ def format_docs(docs):
 
 class CleanOutputParser(StrOutputParser):
     def parse(self, text: str) -> str:
-        # Strip Qwen thinking tokens
+        # Strip Phi-3 thinking tokens
+        text = re.sub(r'<\|thinking\|>.*?<\|/thinking\|>', '', text, flags=re.DOTALL)
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        # Strip any remaining ChatML tokens
-        text = re.sub(r'<\|im_start\|>.*?<\|im_end\|>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<\|im_end\|>', '', text)
+        # Strip any other special Phi-3 tokens
+        text = re.sub(r'<\|.*?\|>', '', text)
         return text.strip()
+    
+def prioritized_search(vectorstore, query, k=4, table_boost=1.5):
+    raw_results = vectorstore.similarity_search_with_relevance_scores(query, k=k * 2)
 
-def prioritized_retrieval(query: str, k: int = 8, table_boost: float = 1.5) -> list:
-    """Retrieve k docs, boosting table_nl and table chunks over plain text."""
-    raw = vectorstore.similarity_search_with_relevance_scores(query, k=k * 3)
-    scored = []
-    for doc, score in raw:
-        if doc.metadata.get('content_type') in ('table_nl', 'table'):
-            score *= table_boost
-        scored.append((doc, score))
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return [doc for doc, _ in scored[:k]]
+    scored_docs = []
+    for doc, score in raw_results:
+        final_score = score
+        if doc.metadata.get("content_type") == "table":
+            final_score = score * table_boost
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        scored_docs.append((doc, final_score))
+
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+
+    return [doc for doc, score in scored_docs[:k]]
+
+# Defines the retriever
+retriever = vectorstore.as_retriever( search_kwargs={"k": 5})
+
+prioritized_retriever = RunnableLambda(
+    lambda query: prioritized_search(vectorstore, query, k=10)
+)
+
+# Runs the full LLM chain 
+# 1. Calls the retriever
+# 2. passes the context from the retriever to LLM
+# 3. LLM output is cleaned and outputted
 
 chain = (
     RunnableParallel(
-        context=RunnableLambda(lambda q: format_docs(prioritized_retrieval(q))),
+        context=retriever | format_docs,
         question=RunnablePassthrough(),
-        source_documents=RunnableLambda(prioritized_retrieval)
+        source_documents=prioritized_retriever  # ✅ now a Runnable, not a static call
     )
     .assign(
         answer=prompt | llm | CleanOutputParser()
     )
 )
 
-def run_batch(questions_path: str, output_path: str, references_path: str = None):
-    """Read questions one per line, write one answer per line to output.
-    Optionally scores against reference answers if references_path is provided.
-    """
-    import sys as _sys
-    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'metric_testing'))
-    from metrics import evaluate
-
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-
-    with open(questions_path, 'r', encoding='utf-8') as f:
+def run_batch(questions_path: str, output_path: str):
+    """Read questions one per line, write one answer per line to output."""
+    with open(questions_path, 'r') as f:
         questions = [line.strip() for line in f if line.strip()]
 
-    print(f"Running batch on {len(questions)} questions -> {output_path}")
-    with open(output_path, 'w', encoding='utf-8') as out:
+    print(f"Running batch on {len(questions)} questions → {output_path}")
+    with open(output_path, 'w') as out:
         for i, question in enumerate(questions, 1):
             print(f"  [{i}/{len(questions)}] {question}")
             result = chain.invoke(question)
             answer = result['answer'].strip().replace('\n', ' ')
-            answer = answer.replace('\ufffd', '').replace('\x00', '')
             out.write(answer + '\n')
     print("Done.")
-
-    if references_path:
-        print("\nEvaluating...")
-        results = evaluate(output_path, references_path)
-        print("\n--- Evaluation Results ---")
-        for k, v in results.items():
-            print(f"  {k:<20} {str(v) + '%' if k != 'num_questions' else str(v)}")
-        print("--------------------------")
 
 
 def run_interactive():
@@ -214,17 +252,9 @@ def run_interactive():
         #     print("-" * 10)
 
 
-# Usage:
-#   python llm.py                                                                      -> interactive
-#   python llm.py data/train/questions.txt                                             -> batch, output to system_outputs/system_output.txt
-#   python llm.py data/train/questions.txt data/train/reference_answers.txt            -> batch + eval
-#   python llm.py <questions> <output> <references>                                    -> custom paths
-if len(sys.argv) == 4:
-    run_batch(sys.argv[1], sys.argv[2], sys.argv[3])
-elif len(sys.argv) == 3:
-    # questions + references -> output to system_outputs/system_output.txt
-    run_batch(sys.argv[1], 'system_outputs/system_output.txt', sys.argv[2])
-elif len(sys.argv) == 2:
-    run_batch(sys.argv[1], 'system_outputs/system_output.txt')
+# Run batch if arguments provided, otherwise interactive
+# Usage: python llm.py questions.txt system_output.txt
+if len(sys.argv) == 3:
+    run_batch(sys.argv[1], sys.argv[2])
 else:
     run_interactive()

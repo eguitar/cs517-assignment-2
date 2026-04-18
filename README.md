@@ -1,5 +1,3 @@
-"# cs517-assignment-2"
-
 # 10-Q Filing Embeddings & LLM Query Pipeline
 
 A three-step pipeline to download SEC 10-Q filings, parse and embed them into a FAISS index, and query them using an LLM.

@@ -61,6 +61,15 @@ python llm.py
 
 You will be prompted to enter questions one at a time. Type `exit` or `quit` to end the session.
 
+
+## Step 4 — Evaluation
+
+To evaluate the performance of a given output.txt, run the following command:
+
+```bash
+python metrics.py reference_answers.txt system_output.txt
+```
+
 ---
 
 ## Pipeline Overview
@@ -75,3 +84,4 @@ download_10q.py  →  run.py  →  llm.py
 | 1    | `download_10q.py` | Raw 10-Q filing files                |
 | 2    | `run.py`          | `faiss_index/` embeddings            |
 | 3    | `llm.py`          | Answers via file or interactive mode |
+| 4    | `evaluate.py`     | Generates exact match, F1, and recall score for output|

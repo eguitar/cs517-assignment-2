@@ -75,8 +75,8 @@ python evaluate.py reference_answers.txt system_output.txt
 ## Pipeline Overview
 
 ```
-download_10q.py  →  run.py  →  llm.py
-  (Download)       (Embed)     (Query)
+download_10q.py  →  run.py  →  llm.py →  evaluate.py
+  (Download)       (Embed)     (Query)    (evaluation)
 ```
 
 | Step | Script            | Output                               |
